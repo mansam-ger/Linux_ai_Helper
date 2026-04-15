@@ -8,11 +8,23 @@ import (
 	"strings"
 )
 
-// DataDir is the central directory for all Eugen data files (config, db, RAG documents).
-const DataDir = "eugen_data"
+// ConfigDir is the system-wide configuration directory.
+const ConfigDir = "/etc/eugen"
 
-// ConfigFileName is the name of the configuration file inside DataDir.
+// ConfigFileName is the name of the configuration file inside ConfigDir.
 const ConfigFileName = "eugen.conf"
+
+// DataDirName is the name of the directory for export and RAG data.
+const DataDirName = "eugen_data"
+
+// GetDataDir returns the path to the user's data directory.
+func GetDataDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return DataDirName
+	}
+	return filepath.Join(home, DataDirName)
+}
 
 // Supported backend types
 const (
@@ -159,19 +171,24 @@ func (c *EugenConfig) RenderPrompt(template string, replacements map[string]stri
 
 // EnsureDataDir creates the data directory if it doesn't exist.
 func EnsureDataDir() error {
-	return os.MkdirAll(DataDir, 0755)
+	return os.MkdirAll(GetDataDir(), 0755)
+}
+
+// EnsureConfigDir creates the configuration directory if it doesn't exist.
+func EnsureConfigDir() error {
+	return os.MkdirAll(ConfigDir, 0755)
 }
 
 // ConfigPath returns the full path to eugen.conf.
 func ConfigPath() string {
-	return filepath.Join(DataDir, ConfigFileName)
+	return filepath.Join(ConfigDir, ConfigFileName)
 }
 
-// LoadConfig reads the configuration from eugen.conf inside DataDir.
+// LoadConfig reads the configuration from eugen.conf.
 // If the file doesn't exist, it writes a default config and returns defaults.
 func LoadConfig() (*EugenConfig, error) {
-	if err := EnsureDataDir(); err != nil {
-		return nil, fmt.Errorf("failed to create data directory '%s': %w", DataDir, err)
+	if err := EnsureConfigDir(); err != nil {
+		return nil, fmt.Errorf("failed to create config directory '%s': %w", ConfigDir, err)
 	}
 
 	path := ConfigPath()
@@ -188,7 +205,7 @@ func LoadConfig() (*EugenConfig, error) {
 
 // SaveDefaultConfig writes a well-commented default configuration file.
 func SaveDefaultConfig() error {
-	if err := EnsureDataDir(); err != nil {
+	if err := EnsureConfigDir(); err != nil {
 		return err
 	}
 

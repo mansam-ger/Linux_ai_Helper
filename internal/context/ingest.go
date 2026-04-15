@@ -22,7 +22,7 @@ var ingestExclude = map[string]bool{
 // embeds them via the backend, and returns a populated VectorStore.
 func BuildVectorDatabase(backend inference.Backend, verbose bool) *VectorStore {
 	store := NewVectorStore()
-	dir := config.DataDir
+	dir := config.GetDataDir()
 
 	info, err := os.Stat(dir)
 	if os.IsNotExist(err) || !info.IsDir() {

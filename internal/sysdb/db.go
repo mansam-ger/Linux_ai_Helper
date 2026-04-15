@@ -13,7 +13,7 @@ const DBFileName = "eugen_db.json"
 
 // DBPath returns the full path to the database file inside the data directory.
 func DBPath() string {
-	return filepath.Join(config.DataDir, DBFileName)
+	return filepath.Join(config.GetDataDir(), DBFileName)
 }
 
 // SystemData holds gathered system context

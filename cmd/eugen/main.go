@@ -39,11 +39,11 @@ func main() {
 	resetDB := flag.Bool("r", false, "Leert/löscht die Systemdatenbank (Beendet Eugen danach)")
 	flag.Parse()
 
-	// Load configuration from eugen_data/eugen.conf
+	// Load configuration from /etc/eugen/eugen.conf
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		fmt.Printf("%s\u274C Fehler beim Laden der Konfiguration: %v%s\n", ColorRed, err, ColorReset)
-		os.Exit(1)
+		fmt.Printf("%s\u26A0\uFE0F Hinweis: Systemweite Konfiguration (/etc/eugen) nicht schreibbar (Root-Rechte benötigt?). Verwende Standardkonfiguration.%s\n", ColorYellow, ColorReset)
+		cfg = config.DefaultConfig()
 	}
 
 	if *resetDB {
@@ -255,7 +255,7 @@ func main() {
 			}
 			
 			timestamp := time.Now().Format("2006-01-02_15-04-05")
-			filename := filepath.Join(config.DataDir, fmt.Sprintf("chat_%s.md", timestamp))
+			filename := filepath.Join(config.GetDataDir(), fmt.Sprintf("chat_%s.md", timestamp))
 			
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("# %s Chat Export - %s\n\n", cfg.AssistantName, time.Now().Format("02.01.2006 15:04")))

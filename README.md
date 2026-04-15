@@ -104,6 +104,14 @@ sudo cp bin/eugen /usr/local/bin/
 
 You can run eugen from anywhere by typing ./eugen the data directory will be created automatically in the current directory.
 
+### Ansible Deployment (Enterprise)
+
+For system administrators deploying Eugen across multiple servers, an Ansible playbook is included in the repository. It automatically handles copying the binary and creating the required configuration directories with the correct permissions.
+
+```bash
+# From within the repository root
+ansible-playbook ansible/install_eugen.yml
+```
 
 ### Makefile Targets
 
@@ -117,13 +125,15 @@ You can run eugen from anywhere by typing ./eugen the data directory will be cre
 
 ## ⚙ Configuration
 
-On first launch, Eugen automatically creates the `eugen_data/` directory and generates a default configuration file `eugen.conf` inside it.
+On first launch, Eugen automatically creates the `/etc/eugen` and `~/eugen_data/` directories and generates a default configuration file `eugen.conf` inside `/etc/eugen`.
 
 ### Directory Structure
 
 ```
-eugen_data/
-├── eugen.conf              # Main configuration file
+/etc/eugen/
+└── eugen.conf              # Main configuration file
+
+~/eugen_data/
 ├── eugen_db.json           # System database (created after -p indexing)
 ├── my_knowledge.txt        # ← Place your own RAG documents here
 ├── runbook.md              # ← Place your own RAG documents here
@@ -172,7 +182,7 @@ Current system:
 
 ### Customizing Prompt Templates
 
-All prompts in `eugen.conf` support placeholders:
+All prompts in `/etc/eugen/eugen.conf` support placeholders:
 
 | Placeholder | Description |
 |---|---|
@@ -377,7 +387,7 @@ The system database extends Eugen's knowledge with detailed hardware, network, a
 eugen -p
 ```
 
-The database is stored as `eugen_data/eugen_db.json` and contains:
+The database is stored as `~/eugen_data/eugen_db.json` and contains:
 - **Hardware info**: CPU, RAM, disk layout
 - **Network info**: Interfaces, IPs, routing
 - **Services**: All active systemd units
@@ -394,12 +404,12 @@ These notes are permanently stored and automatically injected into the system co
 
 ### RAG Vector Database
 
-Eugen can use local knowledge documents via Retrieval-Augmented Generation (RAG). Simply place `.txt` or `.md` files in the `eugen_data/` directory:
+Eugen can use local knowledge documents via Retrieval-Augmented Generation (RAG). Simply place `.txt` or `.md` files in the `~/eugen_data/` directory:
 
 ```bash
 # Example: Add your own documentation
-cp docs/network-runbook.md eugen_data/
-cp docs/backup-policy.txt eugen_data/
+cp docs/network-runbook.md ~/eugen_data/
+cp docs/backup-policy.txt ~/eugen_data/
 ```
 
 On startup, all documents are automatically:
@@ -417,7 +427,7 @@ Eugen remembers the last **10 exchanges** (20 messages) in a ring buffer. Older 
 
 ```
 ➜ eugen> save
-✔️ Chat saved as Markdown at: eugen_data/chat_2026-04-11_15-30-00.md
+✔️ Chat saved as Markdown at: ~/eugen_data/chat_2026-04-11_15-30-00.md
 ```
 
 The exported file contains the full chat history in readable Markdown format.
@@ -442,7 +452,8 @@ eugen/
 │   ├── loganalyzer/           # journalctl & dmesg error log reader
 │   ├── diagnostic/            # Health check & supportconfig diagnosis
 │   └── sysdb/                 # Persistent JSON system database
-├── eugen_data/                # Data directory (config, DB, RAG documents)
+├── /etc/eugen/                # Configuration directory (eugen.conf)
+├── ~/eugen_data/              # Data directory (DB, RAG documents, exports)
 ├── Makefile                   # Build system
 └── go.mod                     # Go module (zero external dependencies)
 ```

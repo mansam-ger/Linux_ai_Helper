@@ -1,0 +1,40 @@
+---
+- name: Deploy Eugen System Assistant
+  hosts: localhost
+  become: yes
+  vars:
+    eugen_src: "../bin/eugen"
+    eugen_dest: "/usr/local/bin/eugen"
+    eugen_config_dir: "/etc/eugen"
+
+  tasks:
+    - name: Ensure the Eugen binary has been built
+      ansible.builtin.stat:
+        path: "{{ eugen_src }}"
+      register: eugen_binary
+      delegate_to: localhost
+
+    - name: Fail if binary is missing
+      ansible.builtin.fail:
+        msg: "Eugen binary not found in '{{ eugen_src }}'. Please run 'make build' first."
+      when: not eugen_binary.stat.exists
+
+    - name: Ensure configuration directory exists (/etc/eugen)
+      ansible.builtin.file:
+        path: "{{ eugen_config_dir }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Install Eugen binary to /usr/local/bin
+      ansible.builtin.copy:
+        src: "{{ eugen_src }}"
+        dest: "{{ eugen_dest }}"
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Output deployment success
+      ansible.builtin.debug:
+        msg: "Eugen successfully installed to {{ eugen_dest }} and config directory created at {{ eugen_config_dir }}."
