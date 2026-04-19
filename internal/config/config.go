@@ -8,11 +8,30 @@ import (
 	"strings"
 )
 
+// GetOSName safely reads /etc/os-release and returns the PRETTY_NAME. If it fails, returns "Linux".
+func GetOSName() string {
+	content, err := os.ReadFile("/etc/os-release")
+	if err == nil {
+		lines := strings.Split(string(content), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "PRETTY_NAME=") {
+				val := strings.TrimSpace(strings.TrimPrefix(line, "PRETTY_NAME="))
+				return strings.Trim(val, `"'`)
+			}
+		}
+	}
+	return "Linux"
+}
+
 // ConfigDir is the system-wide configuration directory.
 const ConfigDir = "/etc/eugen"
 
 // ConfigFileName is the name of the configuration file inside ConfigDir.
 const ConfigFileName = "eugen.conf"
+
+// CurrentConfigVersion defines the layout version of the config file.
+// Update this value whenever new keys are added so user templates are upgraded.
+const CurrentConfigVersion = "2026-04-19_15:35"
 
 // DataDirName is the name of the directory for export and RAG data.
 const DataDirName = "eugen_data"
@@ -29,16 +48,22 @@ func GetDataDir() string {
 // Supported backend types
 const (
 	BackendOllama = "ollama"
+	BackendOpenAI = "openai"
 	// Future backends:
-	// BackendOpenAI = "openai"
 	// BackendVLLM   = "vllm"
 )
 
 // EugenConfig holds all runtime configuration for Eugen.
 type EugenConfig struct {
+	// Version tracks if the configuration file needs an automated structural upgrade
+	Version string
+
 	// AssistantName is the name of the assistant (default: "Eugen").
 	// Used in prompts via {name} placeholder.
 	AssistantName string
+
+	// OSName is the detected operation system info, used in prompts via {os}
+	OSName string
 
 	// Backend selects the inference backend ("ollama", future: "openai", "vllm")
 	Backend string
@@ -48,9 +73,13 @@ type EugenConfig struct {
 	OllamaModel      string
 	OllamaEmbedModel string
 
+	// OpenAI settings
+	OpenAIURL   string
+	OpenAIKey   string
+	OpenAIModel string
+	OpenAIEmbedModel string
+
 	// Reserved for future backends
-	// OpenAIURL string
-	// OpenAIKey string
 	// VLLMUrl   string
 
 	// --- Prompt Templates ---
@@ -85,17 +114,23 @@ type EugenConfig struct {
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *EugenConfig {
 	return &EugenConfig{
+		Version:           CurrentConfigVersion,
 		AssistantName:     "Eugen",
+		OSName:            GetOSName(),
 		Backend:           BackendOllama,
 		OllamaURL:         "http://localhost:11434",
 		OllamaModel:       "nemotron-cascade-2:latest",
 		OllamaEmbedModel:  "nomic-embed-text",
+		OpenAIURL:         "https://api.openai.com/v1",
+		OpenAIKey:         "",
+		OpenAIModel:       "gpt-4o",
+		OpenAIEmbedModel:  "text-embedding-3-small",
 		ValidationEnabled: true,
 		RagEnabled:        true,
 
 		PromptSystem: `Du bist {name}, ein hochintelligenter, ressourcenschonender Systemassistent für Administratoren.
 Dein Setup: Komplett lokal ausgeführt (Air-Gapped fähig).
-Zielgruppe: SLES/openSUSE Administratoren.
+Zielgruppe: {os} Administratoren.
 Antworte präzise, auf Deutsch und schlage stets die passenden Kommandozeilen-Befehle vor. Erkläre bei gefährlichen Befehlen warum sie nötig sind.
 Verwende in deinen Text-Antworten regelmäßig Koala Emojis (🐨), um die Stimmung deines Nutzers aufzulockern!
 Wenn der Benutzer eine Aufgabe hat, gib ihm exakt den Bash-Befehl zurück, den er braucht. Format: Den reinen Befehl in Backticks.
@@ -103,7 +138,7 @@ Wenn der Benutzer eine Aufgabe hat, gib ihm exakt den Bash-Befehl zurück, den e
 Gegenwärtiges System:
 {context}`,
 
-		PromptPlan: `Du bist der Task-Planner in "{name}", dem SLES/openSUSE Assistenten.
+		PromptPlan: `Du bist der Task-Planner in "{name}", dem {os} Assistenten.
 Deine Aufgabe ist es, die folgende komplexe Anforderung in eine strikte Sequenz von Bash-Befehlen zu zerlegen.
 Regeln:
 1. Jeder erforderliche Befehl MUSS in einer neuen Zeile stehen und exakt mit "CMD: " beginnen.
@@ -114,7 +149,7 @@ Regeln:
 Kontext:
 {context}`,
 
-		PromptValidation: `Du bist ein Befehlszeilen-Experte für Linux (SLES/openSUSE).
+		PromptValidation: `Du bist ein Befehlszeilen-Experte für Linux ({os}).
 Unten stehen Befehle, die ein KI-Assistent vorgeschlagen hat, UND die echte --help Ausgabe der jeweiligen Programme.
 Prüfe jeden Befehl auf korrekte Parameter: Existiert jeder verwendete Flag/Parameter wirklich laut der Hilfe-Ausgabe?
 
@@ -130,7 +165,7 @@ Vorgeschlagene Befehle:
 Echte Hilfe-Ausgaben der Programme:
 {help}`,
 
-		PromptDiagnose: `Du bist {name}, der Leitende SLES/openSUSE Analyst.
+		PromptDiagnose: `Du bist {name}, der Leitende {os} Analyst.
 Du führst eine tiefgehende "supportconfig" Analyse durch.
 Untersuche die gleich folgenden, aggregierten Systemfehler und Zustände aus dem Archiv.
 Gebe eine chronologische und fachliche Einschätzung der Systemgesundheit und benenne die kritischsten Probleme inklusive detaillierter Lösungsansätze.
@@ -139,7 +174,7 @@ Verwende in deiner Analyse hin und wieder Koala Emojis (🐨).
 SUPPORTCONFIG EXTRAKT:
 {context}`,
 
-		PromptLogAnalysis: `Du bist {name}, ein hochintelligenter Systemassistent für SLES/openSUSE Administratoren.
+		PromptLogAnalysis: `Du bist {name}, ein hochintelligenter Systemassistent für {os} Administratoren.
 Analysiere die folgenden System-Logs (journalctl und dmesg), fasse die kritischen Fehler zusammen und schlage konkrete Lösungsansätze vor.
 Gib falls nötig die exakten Bash-Befehle zur Lösung in Backticks an. Nutze gelegentlich ein Koala Emoji (🐨) in deiner Textantwort!
 
@@ -149,7 +184,7 @@ Journalctl-Errors:
 Dmesg-Errors:
 {dmesg}`,
 
-		PromptHealthCheck: `Du bist {name}, ein KI-Systemassistent. Werte den folgenden schnellen SLES/openSUSE System-Health-Check aus.
+		PromptHealthCheck: `Du bist {name}, ein KI-Systemassistent. Werte den folgenden schnellen {os} System-Health-Check aus.
 Beziehe in deine Beurteilung ausdrücklich Swap-Speicher, freie Festplattenkapazität, Load, kritische Kernel-Events sowie Firewall/SELinux ein.
 Sei in deiner Kurzzusammenfassung kreativ und detailliert, aber bringe mögliche Probleme direkt auf den Punkt (und schlage evtl. Lösungen per Kommandozeilenbefehl vor).
 Benutze ein Koala-Emoji 🐨 zur Begrüßung.
@@ -163,6 +198,7 @@ SYSTEM CHECK:
 // Supported placeholders: {name}, plus any additional key-value pairs.
 func (c *EugenConfig) RenderPrompt(template string, replacements map[string]string) string {
 	result := strings.ReplaceAll(template, "{name}", c.AssistantName)
+	result = strings.ReplaceAll(result, "{os}", c.OSName)
 	for key, value := range replacements {
 		result = strings.ReplaceAll(result, "{"+key+"}", value)
 	}
@@ -194,64 +230,74 @@ func LoadConfig() (*EugenConfig, error) {
 	path := ConfigPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		// First run: write commented default config
-		if wErr := SaveDefaultConfig(); wErr != nil {
+		defaultCfg := DefaultConfig()
+		if wErr := SaveConfig(defaultCfg); wErr != nil {
 			return nil, fmt.Errorf("failed to write default config: %w", wErr)
 		}
-		return DefaultConfig(), nil
+		return defaultCfg, nil
 	}
 
-	return parseConfigFile(path)
+	cfg, err := parseConfigFile(path)
+	if err == nil {
+		if cfg.Version != CurrentConfigVersion {
+			fmt.Printf("\n\033[33m\u2139 Aktualisiere Config-Layout (%s -> %s) für %s. Eigene Werte bleiben erhalten!\033[0m\n", cfg.Version, CurrentConfigVersion, path)
+			cfg.Version = CurrentConfigVersion
+			saveErr := SaveConfig(cfg)
+			if saveErr != nil {
+				fmt.Printf("\033[31m\u26A0 Fehler beim Aktualisieren der Config: %v\033[0m\n", saveErr)
+				fmt.Printf("\033[33m\u2139 Bitte starte Eugen einmalig mit 'sudo eugen', damit das Config-Layout geupdatet werden kann!\033[0m\n\n")
+			}
+		}
+	}
+	return cfg, err
 }
 
-// SaveDefaultConfig writes a well-commented default configuration file.
-func SaveDefaultConfig() error {
+// SaveConfig writes the configuration to eugen.conf using the robust schema.
+func SaveConfig(cfg *EugenConfig) error {
 	if err := EnsureConfigDir(); err != nil {
 		return err
 	}
 
-	content := `# ============================================
+	content := fmt.Sprintf(`# ============================================
 # Eugen Konfiguration
 # ============================================
-# Diese Datei wird beim ersten Start automatisch erstellt.
-# Passe die Werte an dein Setup an und starte Eugen neu.
+# Diese Datei wird beim ersten Start oder bei Updates automatisch generiert.
+# Eigene Werte in den Schlüsseln bleiben erhalten.
 #
 # Mehrzeilige Werte: Beginne den Wert mit """ und beende
 # ihn mit einer Zeile die nur """ enthält (wie Python/TOML).
 
+version = %s
+
 # ---- Allgemein ----
 # Name des Assistenten (wird in allen Prompts als {name} eingesetzt)
-assistant_name = Eugen
+assistant_name = %s
+
+# Betriebssystem (wird in allen Prompts als {os} eingesetzt)
+os_name = %s
 
 # ---- Inference Backend ----
-# Verfügbare Backends: ollama
-# Zukünftig geplant: openai, vllm, llamacpp
-backend = ollama
+# Verfügbare Backends: ollama, openai
+backend = %s
 
 # ---- Ollama Einstellungen ----
-# URL des lokalen Ollama-Servers
-ollama_url = http://localhost:11434
+ollama_url = %s
+ollama_model = %s
+ollama_embed_model = %s
 
-# Modell das Ollama verwenden soll
-ollama_model = nemotron-cascade-2:latest
-
-# Spezielles Embedding-Modell für RAG Vektordatenbank (z.B. nomic-embed-text)
-ollama_embed_model = nomic-embed-text
-
-# ---- OpenAI-kompatible API (zukünftig) ----
-# openai_url = https://api.openai.com/v1
-# openai_key = sk-...
-# openai_model = gpt-4
-
-# ---- vLLM (zukünftig) ----
-# vllm_url = http://localhost:8000
-# vllm_model = meta-llama/Llama-3-8b
+# ---- OpenAI-kompatible API ----
+# Falls 'backend = openai', werden diese Werte zum Streamen via HTTP JSON genutzt.
+openai_url = %s
+openai_key = %s
+openai_model = %s
+openai_embed_model = %s
 
 # ---- Validierung ----
 # Standardmäßig werden KI-generierte Befehle gegen man/help Ausgaben geprüft (true/false).
-validation_enabled = true
+validation_enabled = %t
 
 # Schaltet die dynamische RAG Vector-Datenbank Suche pro Befehl ein (true/false).
-rag_enabled = true
+rag_enabled = %t
 
 # ============================================
 # Prompt-Templates
@@ -261,100 +307,55 @@ rag_enabled = true
 # Mehrzeilige Prompts mit """ ... """ umschließen.
 
 # ---- System-Prompt ----
-# Der Hauptprompt, der die Persönlichkeit des Assistenten definiert.
-# Platzhalter: {name}, {context} (System-Kontext wird automatisch eingesetzt)
 prompt_system = """
-Du bist {name}, ein hochintelligenter, ressourcenschonender Systemassistent für Administratoren.
-Dein Setup: Komplett lokal ausgeführt (Air-Gapped fähig).
-Zielgruppe: SLES/openSUSE Administratoren.
-Antworte präzise, auf Deutsch und schlage stets die passenden Kommandozeilen-Befehle vor. Erkläre bei gefährlichen Befehlen warum sie nötig sind.
-Verwende in deinen Text-Antworten regelmäßig Koala Emojis (🐨), um die Stimmung deines Nutzers aufzulockern!
-Wenn der Benutzer eine Aufgabe hat, gib ihm exakt den Bash-Befehl zurück, den er braucht. Format: Den reinen Befehl in Backticks.
-
-Gegenwärtiges System:
-{context}
+%s
 """
 
 # ---- Plan-Prompt ----
-# Wird vom Task-Planner verwendet, um Aufgaben in Befehlssequenzen aufzulösen.
-# Platzhalter: {name}, {context}
 prompt_plan = """
-Du bist der Task-Planner in "{name}", dem SLES/openSUSE Assistenten.
-Deine Aufgabe ist es, die folgende komplexe Anforderung in eine strikte Sequenz von Bash-Befehlen zu zerlegen.
-Regeln:
-1. Jeder erforderliche Befehl MUSS in einer neuen Zeile stehen und exakt mit "CMD: " beginnen.
-2. Füge KEINE Erklärungen oder Backticks um die Befehle hinzu.
-3. Ergänze bei Installationen Parameter wie "-y" (z.B. zypper in -y ...).
-4. Du kannst vor der Liste "CMD:" eine kurze Einleitung schreiben.
-
-Kontext:
-{context}
+%s
 """
 
 # ---- Validierungs-Prompt ----
-# Wird vom Befehlsvalidator verwendet, um vorgeschlagene Befehle zu prüfen.
-# Platzhalter: {commands}, {help}
 prompt_validation = """
-Du bist ein Befehlszeilen-Experte für Linux (SLES/openSUSE).
-Unten stehen Befehle, die ein KI-Assistent vorgeschlagen hat, UND die echte --help Ausgabe der jeweiligen Programme.
-Prüfe jeden Befehl auf korrekte Parameter: Existiert jeder verwendete Flag/Parameter wirklich laut der Hilfe-Ausgabe?
-
-WICHTIG:
-- Wenn ein Befehl korrekt ist, gib ihn UNVERÄNDERT zurück.
-- Wenn ein Befehl falsche Flags/Parameter enthält, KORRIGIERE ihn anhand der Hilfe-Ausgabe.
-- Gib AUSSCHLIESSLICH die (ggf. korrigierten) Befehle zurück, EINEN PRO ZEILE, ohne Erklärung, ohne Backticks, ohne Nummerierung.
-- Die Anzahl der zurückgegebenen Befehle MUSS exakt gleich der Anzahl der Eingabe-Befehle sein.
-
-Vorgeschlagene Befehle:
-{commands}
-
-Echte Hilfe-Ausgaben der Programme:
-{help}
+%s
 """
 
 # ---- Diagnose-Prompt ----
-# Wird bei der Analyse von supportconfig-Archiven verwendet.
-# Platzhalter: {name}, {context}
 prompt_diagnose = """
-Du bist {name}, der Leitende SLES/openSUSE Analyst.
-Du führst eine tiefgehende "supportconfig" Analyse durch.
-Untersuche die gleich folgenden, aggregierten Systemfehler und Zustände aus dem Archiv.
-Gebe eine chronologische und fachliche Einschätzung der Systemgesundheit und benenne die kritischsten Probleme inklusive detaillierter Lösungsansätze.
-Verwende in deiner Analyse hin und wieder Koala Emojis (🐨).
-
-SUPPORTCONFIG EXTRAKT:
-{context}
+%s
 """
 
 # ---- Log-Analyse-Prompt ----
-# Wird bei der Analyse von journalctl/dmesg-Logs verwendet.
-# Platzhalter: {name}, {journalctl}, {dmesg}
 prompt_log_analysis = """
-Du bist {name}, ein hochintelligenter Systemassistent für SLES/openSUSE Administratoren.
-Analysiere die folgenden System-Logs (journalctl und dmesg), fasse die kritischen Fehler zusammen und schlage konkrete Lösungsansätze vor.
-Gib falls nötig die exakten Bash-Befehle zur Lösung in Backticks an. Nutze gelegentlich ein Koala Emoji (🐨) in deiner Textantwort!
-
-Journalctl-Errors:
-{journalctl}
-
-Dmesg-Errors:
-{dmesg}
+%s
 """
 
 # ---- Health-Check-Prompt ----
-# Wird beim Aufruf von "eugen health" verwendet.
-# Platzhalter: {name}, {context}
 prompt_health_check = """
-Du bist {name}, ein KI-Systemassistent. Werte den folgenden schnellen SLES/openSUSE System-Health-Check aus.
-Beziehe in deine Beurteilung ausdrücklich Swap-Speicher, freie Festplattenkapazität, Load, kritische Kernel-Events sowie Firewall/SELinux ein.
-Sei in deiner Kurzzusammenfassung kreativ und detailliert, aber bringe mögliche Probleme direkt auf den Punkt (und schlage evtl. Lösungen per Kommandozeilenbefehl vor).
-Benutze ein Koala-Emoji 🐨 zur Begrüßung.
-
-SYSTEM CHECK:
-{context}
+%s
 """
-
-`
+`, 
+		cfg.Version,
+		cfg.AssistantName,
+		cfg.OSName,
+		cfg.Backend,
+		cfg.OllamaURL,
+		cfg.OllamaModel,
+		cfg.OllamaEmbedModel,
+		cfg.OpenAIURL,
+		cfg.OpenAIKey,
+		cfg.OpenAIModel,
+		cfg.OpenAIEmbedModel,
+		cfg.ValidationEnabled,
+		cfg.RagEnabled,
+		strings.TrimSpace(cfg.PromptSystem),
+		strings.TrimSpace(cfg.PromptPlan),
+		strings.TrimSpace(cfg.PromptValidation),
+		strings.TrimSpace(cfg.PromptDiagnose),
+		strings.TrimSpace(cfg.PromptLogAnalysis),
+		strings.TrimSpace(cfg.PromptHealthCheck),
+	)
 
 	return os.WriteFile(ConfigPath(), []byte(content), 0644)
 }
@@ -426,8 +427,12 @@ func readMultiLineValue(scanner *bufio.Scanner) string {
 // applyConfigValue sets the appropriate field on EugenConfig based on key name.
 func applyConfigValue(cfg *EugenConfig, key, value string) {
 	switch key {
+	case "version":
+		cfg.Version = value
 	case "assistant_name":
 		cfg.AssistantName = value
+	case "os_name":
+		cfg.OSName = value
 	case "backend":
 		cfg.Backend = value
 	case "ollama_url":
@@ -452,10 +457,13 @@ func applyConfigValue(cfg *EugenConfig, key, value string) {
 		cfg.ValidationEnabled = (strings.ToLower(value) == "true" || value == "1")
 	case "rag_enabled":
 		cfg.RagEnabled = (strings.ToLower(value) == "true" || value == "1")
-	// Future keys:
-	// case "openai_url":
-	//     cfg.OpenAIURL = value
-	// case "openai_key":
-	//     cfg.OpenAIKey = value
+	case "openai_url":
+	    cfg.OpenAIURL = value
+	case "openai_key":
+	    cfg.OpenAIKey = value
+	case "openai_model":
+		cfg.OpenAIModel = value
+	case "openai_embed_model":
+		cfg.OpenAIEmbedModel = value
 	}
 }

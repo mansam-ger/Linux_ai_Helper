@@ -7,26 +7,59 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	"eugen/internal/config"
 )
+
+// PackageManager represents the detected package manager backend
+type PackageManager struct {
+	Name      string
+	SearchCmd string
+	CheckCmd  string
+}
+
+func DetectPackageManager() PackageManager {
+	if _, err := exec.LookPath("zypper"); err == nil {
+		return PackageManager{
+			Name: "zypper",
+			SearchCmd: "zypper search -t package --match-substrings %s | head -n 15",
+			CheckCmd:  "rpm -qa | grep -i %s | head -n 5",
+		}
+	}
+	if _, err := exec.LookPath("pacman"); err == nil {
+		return PackageManager{
+			Name: "pacman",
+			SearchCmd: "pacman -Ss %s | head -n 15",
+			CheckCmd:  "pacman -Qs %s | head -n 5",
+		}
+	}
+	if _, err := exec.LookPath("apt-get"); err == nil {
+		return PackageManager{
+			Name: "apt",
+			SearchCmd: "apt-cache search %s | head -n 15",
+			CheckCmd:  "dpkg -l | grep -i %s | head -n 5",
+		}
+	}
+	if _, err := exec.LookPath("dnf"); err == nil {
+		return PackageManager{
+			Name: "dnf",
+			SearchCmd: "dnf search %s | head -n 15",
+			CheckCmd:  "rpm -qa | grep -i %s | head -n 5",
+		}
+	}
+	return PackageManager{}
+}
 
 // GatherSystemInfo fetches baseline details about the environment.
 // For example, what OS version is running to provide contextual hints to the LLM.
 func GatherSystemInfo() string {
 	var info strings.Builder
 	
-	// Try reading /etc/os-release safely
-	content, err := os.ReadFile("/etc/os-release")
-	if err == nil {
-		lines := strings.Split(string(content), "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "PRETTY_NAME=") {
-				info.WriteString("OS: ")
-				info.WriteString(strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\""))
-				info.WriteString("\n")
-			}
-		}
+	osName := config.GetOSName()
+	if osName != "Linux" {
+		info.WriteString(fmt.Sprintf("OS: %s\n", osName))
 	} else {
-		info.WriteString("OS Information: Unavailable or not running SUSE/openSUSE\n")
+		info.WriteString("OS Information: Unavailable\n")
 	}
 
 	if hostname, err := os.Hostname(); err == nil {
@@ -49,6 +82,11 @@ func GatherSystemInfo() string {
 // SearchPackageKeywords checks if the user wants to install something
 // and runs a background zypper search to feed context to the LLM.
 func SearchPackageKeywords(input string) string {
+	pm := DetectPackageManager()
+	if pm.SearchCmd == "" {
+		return ""
+	}
+
 	lowerInput := strings.ToLower(input)
 	
 	// Quick heuristic check
@@ -67,8 +105,6 @@ func SearchPackageKeywords(input string) string {
 	if len(matches) > 1 {
 		keyword = matches[1]
 	} else {
-		// Fallback: If "nginx" is in the text, keyword could just be that, but we can't guess easily without NLP.
-		// For simplicity, skip if no clear verb-noun structure is found.
 		return ""
 	}
 
@@ -76,7 +112,7 @@ func SearchPackageKeywords(input string) string {
 		return ""
 	}
 
-	cmdStr := fmt.Sprintf("zypper search -t package --match-substrings %s | head -n 15", keyword)
+	cmdStr := fmt.Sprintf(pm.SearchCmd, keyword)
 	out, err := exec.Command("sh", "-c", cmdStr).CombinedOutput()
 	if err != nil {
 		return ""
@@ -87,12 +123,17 @@ func SearchPackageKeywords(input string) string {
 		return ""
 	}
 
-	return fmt.Sprintf("\nLokale Paket-Treffer in zypper für '%s':\n%s\nBitte verwende zum Installieren die exakten Namen aus dieser Tabelle.\n", keyword, res)
+	return fmt.Sprintf("\nLokale Paket-Treffer in %s für '%s':\n%s\nBitte verwende zum Installieren die exakten Namen aus dieser Tabelle.\n", pm.Name, keyword, res)
 }
 
 // CheckInstalledPackages checks if the user questions whether a package is installed
 // and dynamically runs rpm -q to feed context to the LLM.
 func CheckInstalledPackages(input string) string {
+	pm := DetectPackageManager()
+	if pm.CheckCmd == "" {
+		return ""
+	}
+
 	lowerInput := strings.ToLower(input)
 	
 	// Quick heuristic check for intent
@@ -125,8 +166,7 @@ func CheckInstalledPackages(input string) string {
 		return ""
 	}
 
-	// We use rpm -qa and grep to find partial matches
-	cmdStr := fmt.Sprintf("rpm -qa | grep -i %s | head -n 5", keyword)
+	cmdStr := fmt.Sprintf(pm.CheckCmd, keyword)
 	out, err := exec.Command("sh", "-c", cmdStr).CombinedOutput()
 	if err != nil {
 		return ""

@@ -19,7 +19,9 @@ import (
 	"eugen/internal/inference"
 	"eugen/internal/loganalyzer"
 	"eugen/internal/ollama"
+	"eugen/internal/openai"
 	"eugen/internal/planner"
+	"eugen/internal/plugin"
 	"eugen/internal/sysdb"
 )
 
@@ -115,18 +117,24 @@ func main() {
 	} else {
 		fmt.Printf("%s\u2139 Tipp: Rufe %s einmalig mit '-p' auf, um sein Offline-Systemwissen drastisch auszubauen.%s\n", ColorYellow, cfg.AssistantName, ColorReset)
 	}
+
+	// Load local plugins
+	plugins, pErr := plugin.LoadPlugins(filepath.Join(config.GetDataDir(), "plugins"))
+	if pErr == nil && len(plugins) > 0 {
+		sysContext += plugin.FormatPluginContext(plugins)
+		fmt.Printf("%s\u2139 %d Admin-Plugins erfolgreich in den Kontext geladen.%s\n", ColorGreen, len(plugins), ColorReset)
+	}
 	
 	if *logFile != "" {
-		content, err := os.ReadFile(*logFile)
+		filteredContent, bytesScanned, err := filterLogFile(*logFile)
 		if err != nil {
 			fmt.Printf("%s\u26A0 Konnte Logdatei '%s' nicht lesen: %v%s\n", ColorRed, *logFile, err, ColorReset)
 		} else {
-			contentStr := strings.ToValidUTF8(string(content), "")
-			if len(contentStr) > 50000 { // limit roughly to 50KB to not blow up context
-				contentStr = "... [LOG GEKÜRZT] ...\n" + contentStr[len(contentStr)-50000:]
+			if filteredContent == "" {
+				filteredContent = "Regulärer Scan: Keine auffälligen ERROR/WARN/CRITICAL Schüsselwörter gefunden."
 			}
-			sysContext += fmt.Sprintf("\n[Zusätzliche angehängte Logdatei: %s]\n%s\n", *logFile, contentStr)
-			fmt.Printf("%s\u2139 Logdatei '%s' (%d Bytes) in den System-Kontext geladen.%s\n", ColorCyan, *logFile, len(content), ColorReset)
+			sysContext += fmt.Sprintf("\n[Gefilterte Fehler-Extraktion aus '%s' (Originalgröße: %d Bytes)]\n%s\n", *logFile, bytesScanned, filteredContent)
+			fmt.Printf("%s\u2139 Logdatei '%s' (ca. %d Bytes analysiert) smart gefiltert und in den System-Kontext geladen.%s\n", ColorCyan, *logFile, bytesScanned, ColorReset)
 		}
 	}
 	
@@ -473,7 +481,7 @@ func main() {
 		
 		if len(cmdsToExecute) > 0 {
 			if len(cmdsToExecute) == 1 {
-				handleExecution(execng, cmdsToExecute[0], scanner)
+				handleExecution(execng, backend, cfg, cmdsToExecute[0], scanner)
 			} else {
 				fmt.Printf("\n%s\u2139 %s hat mehrere Befehle vorgeschlagen:%s\n", ColorBlue, cfg.AssistantName, ColorReset)
 				for i, c := range cmdsToExecute {
@@ -492,14 +500,14 @@ func main() {
 				
 				if ans == "a" || ans == "alle" {
 					for _, c := range cmdsToExecute {
-						handleExecution(execng, c, scanner)
+						handleExecution(execng, backend, cfg, c, scanner)
 					}
 				} else if ans == "x" || ans == "abbrechen" || ans == "" {
 					fmt.Println("Abbruch.")
 				} else {
 					idx, err := strconv.Atoi(ans)
 					if err == nil && idx > 0 && idx <= len(cmdsToExecute) {
-						handleExecution(execng, cmdsToExecute[idx-1], scanner)
+						handleExecution(execng, backend, cfg, cmdsToExecute[idx-1], scanner)
 					} else {
 						fmt.Println("Ungültige Auswahl, Abbruch.")
 					}
@@ -509,7 +517,7 @@ func main() {
 	}
 }
 
-func handleExecution(execng *executor.Executor, cmdToExecute string, scanner *bufio.Scanner) {
+func handleExecution(execng *executor.Executor, backend inference.Backend, cfg *config.EugenConfig, cmdToExecute string, scanner *bufio.Scanner) {
 	risk := execng.AnalyzeCommand(cmdToExecute)
 			
 	if risk == executor.RiskHigh {
@@ -520,7 +528,7 @@ func handleExecution(execng *executor.Executor, cmdToExecute string, scanner *bu
 		scanner.Scan()
 		confirm := strings.TrimSpace(scanner.Text())
 		if confirm == "EXECUTE" {
-			runCommand(execng, cmdToExecute)
+			promptForSnapshotAndRun(execng, cmdToExecute, scanner)
 		} else {
 			fmt.Println("Abbruch.")
 		}
@@ -528,19 +536,26 @@ func handleExecution(execng *executor.Executor, cmdToExecute string, scanner *bu
 	} else if risk == executor.RiskMedium {
 		fmt.Printf("\n%s\u26A0 Systemveränderung detektiert.%s\n", ColorYellow, ColorReset)
 		fmt.Printf("Befehl: %s%s%s\n", ColorYellow, cmdToExecute, ColorReset)
-		fmt.Printf("Befehl ausführen? [J]a / [N]ein / [A]npassen : ")
+		fmt.Printf("Befehl ausführen? [J]a / [N]ein / [A]npassen / [E]rklären : ")
 		
 		scanner.Scan()
 		ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
 		if ans == "j" || ans == "ja" {
-			runCommand(execng, cmdToExecute)
+			promptForSnapshotAndRun(execng, cmdToExecute, scanner)
 		} else if ans == "a" || ans == "anpassen" {
 			fmt.Print("Neuer Befehl: ")
 			scanner.Scan()
 			modCmd := strings.TrimSpace(scanner.Text())
 			if modCmd != "" {
-				runCommand(execng, modCmd)
+				promptForSnapshotAndRun(execng, modCmd, scanner)
 			}
+		} else if ans == "e" || ans == "erklären" {
+			explainPrompt := fmt.Sprintf("Erkläre mir ganz kurz und prägnant, was dieser Befehl macht und welche Flags genutzt werden:\n`%s`", cmdToExecute)
+			fmt.Printf("\n%s\U0001f916 Erklärung:%s\n", ColorCyan, ColorReset)
+			_, _ = backend.Generate("Du erklärst Bash-Befehle präzise.", explainPrompt, func(t string) { fmt.Print(t) })
+			fmt.Println()
+			// Retry execution after explanation
+			handleExecution(execng, backend, cfg, cmdToExecute, scanner)
 		} else {
 			fmt.Println("Abbruch.")
 		}
@@ -556,6 +571,24 @@ func handleExecution(execng *executor.Executor, cmdToExecute string, scanner *bu
 			fmt.Println("Abbruch.")
 		}
 	}
+}
+
+func promptForSnapshotAndRun(execng *executor.Executor, cmdToExecute string, scanner *bufio.Scanner) {
+	if execng.CheckIfBtrfs() && execng.IsSnapperInstalled() {
+		fmt.Printf("\n%s\u2139 BTRFS System detektiert.%s Vor der Ausführung einen Snapper-Snapshot anlegen? [J/n]: ", ColorBlue, ColorReset)
+		scanner.Scan()
+		ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if ans == "" || ans == "j" || ans == "ja" {
+			fmt.Printf("%s\u23F3 Erstelle Snapshot...%s", ColorCyan, ColorReset)
+			err := execng.CreateSnapshot(cmdToExecute)
+			if err != nil {
+				fmt.Printf("\n%s\u26A0 Snapshot fehlgeschlagen: %v%s\n", ColorYellow, err, ColorReset)
+			} else {
+				fmt.Printf("\n%s\u2714\uFE0F Snapshot erfolgreich erstellt.%s\n", ColorGreen, ColorReset)
+			}
+		}
+	}
+	runCommand(execng, cmdToExecute)
 }
 
 // stripCodeBlocks entfernt Code-Blöcke und Standalone-Backtick-Zeilen aus der Antwort,
@@ -580,6 +613,50 @@ func stripCodeBlocks(resp string) string {
 		result = append(result, l)
 	}
 	return strings.TrimSpace(strings.Join(result, "\n"))
+}
+
+// filterLogFile reads a log file line by line and filters for critical keywords
+// to avoid overflowing the AI context with megabytes of debug logs.
+func filterLogFile(path string) (string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	// Some log lines can be huge
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var matched []string
+	keywords := []string{"error", "fail", "warn", "panic", "critical", "crit", "emerg", "alert", "err"}
+	
+	var bytesScanned int64
+	for scanner.Scan() {
+		line := scanner.Text()
+		bytesScanned += int64(len(line))
+		
+		lowerL := strings.ToLower(line)
+		for _, k := range keywords {
+			if strings.Contains(lowerL, k) {
+				matched = append(matched, strings.TrimSpace(line))
+				break
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", bytesScanned, err
+	}
+	
+	// Keep the last 150 matched lines at most to ensure context safety
+	maxLines := 150
+	if len(matched) > maxLines {
+		matched = matched[len(matched)-maxLines:]
+	}
+	
+	res := strings.Join(matched, "\n")
+	return strings.ToValidUTF8(res, ""), bytesScanned, nil
 }
 
 // extractCommands greift ausführbare Befehle aus der Antwort ab.
@@ -748,12 +825,12 @@ func createBackend(cfg *config.EugenConfig) (inference.Backend, error) {
 	switch cfg.Backend {
 	case config.BackendOllama:
 		return ollama.NewClient(cfg.OllamaURL, cfg.OllamaModel, cfg.OllamaEmbedModel), nil
+	case config.BackendOpenAI:
+	    return openai.NewClient(cfg.OpenAIURL, cfg.OpenAIKey, cfg.OpenAIModel, cfg.OpenAIEmbedModel), nil
 	// Future backends:
-	// case config.BackendOpenAI:
-	//     return openai.NewClient(cfg.OpenAIURL, cfg.OpenAIKey, cfg.OpenAIModel), nil
 	// case config.BackendVLLM:
 	//     return vllm.NewClient(cfg.VLLMUrl, cfg.VLLMModel), nil
 	default:
-		return nil, fmt.Errorf("unbekanntes Backend '%s' in eugen.conf. Unterstützt: %s", cfg.Backend, config.BackendOllama)
+		return nil, fmt.Errorf("unbekanntes Backend '%s' in eugen.conf. Unterstützt: %s, %s", cfg.Backend, config.BackendOllama, config.BackendOpenAI)
 	}
 }

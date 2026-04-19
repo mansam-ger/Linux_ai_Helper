@@ -1,6 +1,6 @@
-# 🐨 Eugen – Local AI System Assistant for SLES & openSUSE
+# 🐨 Eugen – Local AI System Assistant for Linux
 
-**Eugen** is a privacy-first, offline-capable AI assistant for the Linux command line. Built specifically for **SUSE Linux Enterprise Server (SLES)** and **openSUSE**, it runs entirely locally – no cloud, no external API calls, no data leakage.
+**Eugen** is a privacy-first, offline-capable AI assistant for the Linux command line. Built for modern Linux distributions (including Debian, Ubuntu, RHEL, Arch, SLES, and openSUSE), it runs entirely locally – no cloud, no external API calls, no data leakage.
 
 Eugen translates natural language into precise Bash commands, analyzes system logs, creates execution plans, and performs deep system diagnostics – all powered by a local LLM via [Ollama](https://ollama.com).
 
@@ -50,19 +50,21 @@ nemotron-cascade-2:latest
 | **Task Planner** | Break complex tasks into executable command sequences |
 | **Log Analysis** | Automatic reading and assessment of `journalctl` & `dmesg` errors |
 | **Health Check** | Instant overview of load, RAM, disk, services, firewall |
-| **Deep Diagnosis** | Full `supportconfig` analysis with AI-powered assessment |
+| **Deep Diagnosis** | Full `supportconfig` analysis with AI-powered assessment (SUSE only) |
 | **Offline System Database** | Index hardware, network & services once and use them permanently |
 | **RAG Vector Database** | Embed your own documents (`.txt`, `.md`) as local knowledge |
 | **Chat Memory** | Ring buffer of the last 10 exchanges for context-aware responses |
 | **Chat Export** | Save conversations as Markdown files |
-| **100% Offline** | No cloud connection, no data leakage – fully air-gapped |
+| **100% Offline** | No cloud connection, no data leakage – fully air-gapped (unless OpenAI backend is selected) |
 | **Zero Dependencies** | Pure Go standard library, statically compiled single binary |
+| **Snapshots (BTRFS)** | Automatic Btrfs snapshots via `snapper` before high risk commands |
+| **Plugin System** | Connect your own bash scripts and tools to the AI |
 
 ---
 
 ## 📋 Prerequisites
 
-- **Operating System:** SLES 15+ or openSUSE Leap/Tumbleweed
+- **Operating System:** Any modern Linux Distribution (Debian, Ubuntu, RHEL, Fedora, Arch, SUSE, etc.)
 - **Go:** Version 1.26+ (only needed for compilation)
 - **Ollama:** Local Ollama instance (default: `http://localhost:11434`)
 - **LLM Model:** A model loaded in Ollama (default: `nemotron-cascade-2:latest`)
@@ -127,6 +129,9 @@ ansible-playbook ansible/install_eugen.yml
 
 On first launch, Eugen automatically creates the `/etc/eugen` and `~/eugen_data/` directories and generates a default configuration file `eugen.conf` inside `/etc/eugen`.
 
+**Auto-Updates:** Eugen tracks its configuration layout via a internal `version` key. If you update Eugen to a newer binary and the configuration template changes (e.g. new backend features are added), Eugen will automatically upgrade your `eugen.conf` while preserving your custom values!
+*Note: Since `/etc/eugen` is owned by root, you might need to run `sudo eugen` once after a binary update so it has the permissions to rewrite the file layout.*
+
 ### Directory Structure
 
 ```
@@ -137,6 +142,7 @@ On first launch, Eugen automatically creates the `/etc/eugen` and `~/eugen_data/
 ├── eugen_db.json           # System database (created after -p indexing)
 ├── my_knowledge.txt        # ← Place your own RAG documents here
 ├── runbook.md              # ← Place your own RAG documents here
+├── plugins/                # ← Place your own Bash/Python executable admin tools here
 └── chat_2026-04-11_*.md    # Exported chat sessions
 ```
 
@@ -173,10 +179,13 @@ Current system:
 | Key | Default | Description |
 |---|---|---|
 | `assistant_name` | `Eugen` | Name of the assistant (appears in prompts as `{name}`) |
-| `backend` | `ollama` | Inference backend (`ollama`; more planned) |
+| `backend` | `ollama` | Inference backend (`ollama`, `openai`) |
 | `ollama_url` | `http://localhost:11434` | URL of the Ollama server |
 | `ollama_model` | `nemotron-cascade-2:latest` | LLM model for text generation |
 | `ollama_embed_model` | `nomic-embed-text` | Embedding model for RAG |
+| `openai_url` | `https://api.openai.com/v1` | URL for OpenAI-compatible APIs (LM Studio, vLLM, etc.) |
+| `openai_key` | `""` | API Key for the OpenAI backend |
+| `openai_model` | `gpt-4o` | LLM model for the OpenAI backend |
 | `validation_enabled` | `true` | Validate commands against man/help output |
 | `rag_enabled` | `true` | Enable RAG vector database search |
 
@@ -230,7 +239,7 @@ Backend: Ollama | URL: http://localhost:11434 | Modell: nemotron-cascade-2:lates
 When a response contains executable commands, you will be prompted before execution:
 
 - **Low Risk** → `Execute? [J/n]`
-- **Medium Risk** → `[J]a / [N]ein / [A]npassen` (Yes / No / Modify)
+- **Medium Risk** → `[J]a / [N]ein / [A]npassen / [E]rklären` (Yes / No / Modify / Explain)
 - **High Risk** → Type `EXECUTE` to confirm the command
 
 ### REPL Commands
@@ -306,10 +315,12 @@ Every suggested command is automatically evaluated with a 3-tier risk scoring sy
 | Level | Examples | Confirmation |
 |---|---|---|
 | 🟢 **Low** | `cat`, `ls`, `grep`, `systemctl status` | `[J/n]` (simple yes/no) |
-| 🟡 **Medium** | `zypper install`, `systemctl restart`, `chmod` | `[J]a / [N]ein / [A]npassen` (yes/no/modify) |
+| 🟡 **Medium** | `zypper install`, `systemctl restart`, `chmod` | `[J]a / [N]ein / [A]npassen / [E]rklären` |
 | 🔴 **High** | `rm -rf`, `dd`, `mkfs`, `fdisk`, writes to `/etc/` | Must type `EXECUTE` to confirm |
 
-For **medium risk** commands, you can use `[A]npassen` (modify) to manually edit the command before execution.
+For **medium risk** commands, you can use `[A]npassen` (modify) to manually edit the command before execution, or press `[E]rklären` to let the AI dynamically explain what all the used flags and parameters mean before you agree.
+
+**BTRFS Auto-Snapshots:** If Eugen detects a Btrfs filesystem and `snapper`, it will interatively ask to create a pre-execution snapshot for all Medium and High risk commands! If something goes horribly wrong, you can rollback.
 
 ### Command Validation (man/help)
 
@@ -369,7 +380,7 @@ Runs an instant system health check and lets the AI comment on the results:
 ➜ eugen> diagnose
 ```
 
-Runs a full SLES system diagnosis using `supportconfig`:
+Runs a full SLES system diagnosis using `supportconfig` *(Note: This feature is only supported natively on SLES/openSUSE)*:
 
 1. Checks if `supportutils` is installed (auto-installs if needed)
 2. Offers two diagnosis levels:
@@ -401,6 +412,23 @@ The database is stored as `~/eugen_data/eugen_db.json` and contains:
 ```
 
 These notes are permanently stored and automatically injected into the system context for every conversation.
+
+### Plugin System (Admin Tools)
+
+You can provide Eugen with custom executable scripts (Bash, Python, etc.) through the Plugin System. Eugen will recognize these tools and dynamically suggest or call them when solving your problems.
+
+1. Create a script in `~/eugen_data/plugins/`. Ensure it has the executable bit set (`chmod +x`).
+2. Add a `Description` comment at the top of the file so Eugen understands what it does.
+
+```bash
+# ~/eugen_data/plugins/reset-vpn.sh
+#!/bin/bash
+# Description: Resets the company Wireguard VPN interface and flushes the routing table.
+
+systemctl restart wg-quick@wg0
+```
+
+When you start Eugen, it will parse all scripts in that folder and inject their metadata into its intelligence. You can then say: `➜ eugen> The VPN is stuck again` and Eugen will propose to execute `/root/eugen_data/plugins/reset-vpn.sh`!
 
 ### RAG Vector Database
 

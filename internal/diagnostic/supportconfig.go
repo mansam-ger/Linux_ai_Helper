@@ -15,6 +15,10 @@ func EnsureSupportutils() error {
 		return nil
 	}
 	
+	if _, zErr := exec.LookPath("zypper"); zErr != nil {
+		return fmt.Errorf("Diagnosefunktion 'supportconfig' wird nativ nur unter SLES/openSUSE unterstützt. Das Tool konnte auf diesem System nicht gefunden werden")
+	}
+	
 	fmt.Println("[\u2139] 'supportconfig' nicht gefunden. Installiere Paket 'supportutils' via zypper (kann dauern)...")
 	cmd := exec.Command("sh", "-c", "zypper in -y supportutils")
 	out, inErr := cmd.CombinedOutput()

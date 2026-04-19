@@ -78,3 +78,32 @@ func (e *Executor) Execute(command string) (string, error) {
 	}
 	return "", nil
 }
+
+// CheckIfBtrfs checks if the root filesystem is btrfs.
+func (e *Executor) CheckIfBtrfs() bool {
+	cmd := exec.Command("bash", "-c", "df -T / | tail -n 1 | awk '{print $2}'")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "btrfs"
+}
+
+// IsSnapperInstalled checks if the snapper utility is available.
+func (e *Executor) IsSnapperInstalled() bool {
+	_, err := exec.LookPath("snapper")
+	return err == nil
+}
+
+// CreateSnapshot creates a pre-execution snapshot using snapper.
+func (e *Executor) CreateSnapshot(description string) error {
+	descSafe := strings.ReplaceAll(description, "\"", "\\\"")
+	cmdLine := fmt.Sprintf("snapper create -t single -d \"Eugen Pre-Execution: %s\"", descSafe)
+	cmd := exec.Command("bash", "-c", cmdLine)
+	
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("snapper failed: %s (%v)", string(out), err)
+	}
+	return nil
+}
