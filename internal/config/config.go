@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -31,7 +32,7 @@ const ConfigFileName = "eugen.conf"
 
 // CurrentConfigVersion defines the layout version of the config file.
 // Update this value whenever new keys are added so user templates are upgraded.
-const CurrentConfigVersion = "2026-04-19_15:35"
+const CurrentConfigVersion = "2026-05-02_12:13"
 
 // DataDirName is the name of the directory for export and RAG data.
 const DataDirName = "eugen_data"
@@ -109,6 +110,9 @@ type EugenConfig struct {
 
 	// RagEnabled determines if RAG documents are queried during conversation.
 	RagEnabled bool
+
+	// RagThreshold defines the minimum cosine similarity score to consider a RAG match valid.
+	RagThreshold float64
 }
 
 // DefaultConfig returns a configuration with sensible defaults.
@@ -127,6 +131,7 @@ func DefaultConfig() *EugenConfig {
 		OpenAIEmbedModel:  "text-embedding-3-small",
 		ValidationEnabled: true,
 		RagEnabled:        true,
+		RagThreshold:      0.45,
 
 		PromptSystem: `Du bist {name}, ein hochintelligenter, ressourcenschonender Systemassistent für Administratoren.
 Dein Setup: Komplett lokal ausgeführt (Air-Gapped fähig).
@@ -299,6 +304,9 @@ validation_enabled = %t
 # Schaltet die dynamische RAG Vector-Datenbank Suche pro Befehl ein (true/false).
 rag_enabled = %t
 
+# Definiert die Ähnlichkeits-Schwelle (Cosine Similarity), ab der ein Dokument als relevant gilt.
+rag_threshold = %f
+
 # ============================================
 # Prompt-Templates
 # ============================================
@@ -349,6 +357,7 @@ prompt_health_check = """
 		cfg.OpenAIEmbedModel,
 		cfg.ValidationEnabled,
 		cfg.RagEnabled,
+		cfg.RagThreshold,
 		strings.TrimSpace(cfg.PromptSystem),
 		strings.TrimSpace(cfg.PromptPlan),
 		strings.TrimSpace(cfg.PromptValidation),
@@ -457,6 +466,10 @@ func applyConfigValue(cfg *EugenConfig, key, value string) {
 		cfg.ValidationEnabled = (strings.ToLower(value) == "true" || value == "1")
 	case "rag_enabled":
 		cfg.RagEnabled = (strings.ToLower(value) == "true" || value == "1")
+	case "rag_threshold":
+		if val, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.RagThreshold = val
+		}
 	case "openai_url":
 	    cfg.OpenAIURL = value
 	case "openai_key":

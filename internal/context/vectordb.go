@@ -56,7 +56,7 @@ type docResult struct {
 
 // Search evaluates all chunks and aggregates their scores (if > 0.1) by source document.
 // It returns the full content of the single document with the highest aggregate score.
-func (vs *VectorStore) Search(backend inference.Backend, query string, topK int, verbose bool) string {
+func (vs *VectorStore) Search(backend inference.Backend, query string, threshold float64, topK int, verbose bool) string {
 	if len(vs.Chunks) == 0 {
 		return ""
 	}
@@ -92,15 +92,15 @@ func (vs *VectorStore) Search(backend inference.Backend, query string, topK int,
 
 	var results []docResult
 	for file, score := range docScores {
-		// A document is only considered if it has at least one chunk with a similarity >= 0.7
-		if docMax[file] < 0.7 {
+		// A document is only considered if it has at least one chunk with a similarity >= threshold
+		if docMax[file] < threshold {
 			continue
 		}
 		results = append(results, docResult{fileName: file, score: score})
 	}
 
 	if len(results) == 0 {
-		// No document met the max >= 0.7 threshold
+		// No document met the max >= threshold
 		return ""
 	}
 

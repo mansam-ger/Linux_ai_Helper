@@ -209,7 +209,7 @@ func main() {
 
 			// Vector RAG Search
 			if cfg.RagEnabled {
-				ragCtx := vecStore.Search(backend, taskStr, 3, *verbose)
+				ragCtx := vecStore.Search(backend, taskStr, cfg.RagThreshold, 3, *verbose)
 				activeContext += "\n" + ragCtx
 			}
 			
@@ -291,6 +291,25 @@ func main() {
 			} else {
 				fmt.Printf("%s\u2714\uFE0F Notiz erfolgreich zur Datenbank hinzugefügt.%s\n", ColorGreen, ColorReset)
 				sysContext += "\nZusätzliche Benutzer-Notiz zur Infrastruktur: " + note + "\n"
+			}
+			continue
+		} else if strings.HasPrefix(input, "learn ") || strings.HasPrefix(input, "man ") {
+			toolName := ""
+			if strings.HasPrefix(input, "learn ") {
+				toolName = strings.TrimSpace(strings.TrimPrefix(input, "learn "))
+			} else {
+				toolName = strings.TrimSpace(strings.TrimPrefix(input, "man "))
+			}
+			if toolName == "" {
+				fmt.Printf("%s\u2139 Bitte gib ein Tool an, z.B. 'learn rsync' oder 'man tar'.%s\n", ColorYellow, ColorReset)
+				continue
+			}
+			fmt.Printf("%s\u23F3 Lese und analysiere Man-Page für '%s'...%s\n", ColorCyan, toolName, ColorReset)
+			err := context.IngestManPage(vecStore, backend, toolName)
+			if err != nil {
+				fmt.Printf("%s\u274C Fehler: %v%s\n", ColorRed, err, ColorReset)
+			} else {
+				fmt.Printf("%s\u2714\uFE0F Man-Page für '%s' erfolgreich extrahiert und in das RAG-System geladen.%s\n", ColorGreen, toolName, ColorReset)
 			}
 			continue
 		} else if input == "db show" || input == "db list" {
@@ -426,7 +445,7 @@ func main() {
 
 			// Vector RAG Search
 			if cfg.RagEnabled {
-				ragCtx := vecStore.Search(backend, input, 3, *verbose)
+				ragCtx := vecStore.Search(backend, input, cfg.RagThreshold, 3, *verbose)
 				if ragCtx != "" {
 					activePrompt += "\n" + ragCtx
 				}
@@ -803,6 +822,7 @@ func printHelp(cfg *config.EugenConfig) {
 	fmt.Printf("  %ssave, export%s  - Speichert die aktuelle Chat-Sitzung als Markdown Datei im config-Ordner.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %sdb show%s       - Zeigt den Inhalt der lokalen Systemdatenbank an.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %sdb add <text>%s - Fügt eigenes Wissen dauerhaft in die DB und den Prompt hinzu.\n", ColorGreen, ColorReset)
+	fmt.Printf("  %slearn, man <tool>%s  - Liest die Man-Page von <tool> ein und fügt sie ins RAG-System ein.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %shealth, check%s - Führt einen sekundenschnellen Basis-Systemcheck (Load, RAM, Disk) aus.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %sdiagnose%s      - Lädt oder installiert supportconfig und führt eine SLES Tiefendiagnose durch.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %splan <aufgabe>%s- Erstellt ein schrittweises Ausführungsskript für komplexe Tasks.\n", ColorGreen, ColorReset)

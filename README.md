@@ -140,6 +140,7 @@ On first launch, Eugen automatically creates the `/etc/eugen` and `~/eugen_data/
 
 ~/eugen_data/
 ├── eugen_db.json           # System database (created after -p indexing)
+├── rag_cache.json          # Cached Vector Embeddings for fast startup
 ├── my_knowledge.txt        # ← Place your own RAG documents here
 ├── runbook.md              # ← Place your own RAG documents here
 ├── plugins/                # ← Place your own Bash/Python executable admin tools here
@@ -188,6 +189,7 @@ Current system:
 | `openai_model` | `gpt-4o` | LLM model for the OpenAI backend |
 | `validation_enabled` | `true` | Validate commands against man/help output |
 | `rag_enabled` | `true` | Enable RAG vector database search |
+| `rag_threshold` | `0.45` | Cosine similarity threshold for RAG match relevance |
 
 ### Customizing Prompt Templates
 
@@ -253,6 +255,7 @@ When a response contains executable commands, you will be prompted before execut
 | `plan <task>` | Create a step-by-step execution plan for a complex task |
 | `db show` or `db list` | Display the contents of the local system database |
 | `db add <text>` | Permanently add custom knowledge (e.g. infrastructure notes) to the DB |
+| `learn <tool>` or `man <tool>` | Ingest a man-page directly into the RAG system |
 | `save` or `export` | Save the current chat session as a Markdown file |
 | `validation on/off` | Toggle man/help validation at runtime |
 | `rag on/off` | Toggle RAG vector database search at runtime |
@@ -445,9 +448,11 @@ On startup, all documents are automatically:
 2. Vectorized through the embedding model
 3. Searched via cosine similarity on every query
 
-A document is only injected into context if at least one chunk achieves a relevance score ≥ 0.7, preventing irrelevant matches from polluting the context.
+A document is only injected into context if at least one chunk achieves a relevance score ≥ 0.45, preventing irrelevant matches from polluting the context.
 
-**Excluded** from ingestion: `eugen.conf` and `eugen_db.json`.
+**Man-Page Ingestion:** You can dynamically teach Eugen about new tools by typing `learn <tool>` or `man <tool>` in the REPL. Eugen will fetch the manual page, vectorize it, and save it permanently as a `.txt` file in `~/eugen_data/`.
+
+**Excluded** from ingestion: `eugen.conf`, `eugen_db.json`, and `rag_cache.json`.
 
 ### Chat Memory & Export
 
