@@ -27,3 +27,11 @@ Dieses Dokument definiert die strikten Entwicklungsregeln und Architekturvorgabe
 - Es dürfen **niemals** API-Aufrufe an externe Cloud-Provider integriert werden.
 - Die gesamte Kommunikation erfolgt ausschließlich über den vom User definierten (oder lokalen) Ollama-Endpunkt.
 - Systemverändernde Befehle (Risk-Score > Low) erfordern stets einen expliziten **Interaktiv-Prompt** (`[J]a / [N]ein / [A]npassen` oder bei hohem Risiko das Eintippen von `EXECUTE`). Es erfolgt prinzipiell keine unkontrollierte automatische Systemveränderung.
+
+## 5. Konfigurations-Versionierung
+- Wann immer das Layout der Konfigurationsdatei (`eugen.conf`) durch neue Features oder Keys in `internal/config/config.go` verändert wird, **MUSS zwingend** der Wert `CurrentConfigVersion` auf das aktuelle Datum/Zeit aktualisiert werden (z.B. `2026-05-02_12:00`). 
+- Dies garantiert, dass die User-Konfigurationen beim Start auf die neue Struktur angehoben werden. Vergiss dies bei keiner Entwicklungs-Session!
+
+## 6. Dokumentation & Interne Hilfe
+- Wenn neue Befehle (REPL-Commands) oder Start-Flags (CLI) hinzugefügt werden, **MÜSSEN** diese zwingend in der internen Hilfe-Funktion (`printHelp` in `cmd/eugen/main.go`) dokumentiert werden.
+- Ebenso muss die `README.md` (Tabellen für REPL Commands und CLI Flags) stets synchron mit den neuen Funktionen gehalten werden. Vergiss das nicht!
