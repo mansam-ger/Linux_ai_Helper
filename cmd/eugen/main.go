@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +39,7 @@ const (
 func main() {
 	verbose := flag.Bool("v", false, "Aktiviere Verbose-Modus (zeigt Prompts und API Payload an)")
 	logFile := flag.String("f", "", "Pfad zu einer Logdatei, die in den Kontext geladen werden soll")
+	configFile := flag.String("c", "", "Pfad zu einer Konfigurationsdatei (nur Text), die in den Kontext geladen werden soll")
 	populateDB := flag.Bool("p", false, "Populiert die lokales Systemdatenbank mit Hardware/Paket-Wissen (Beendet Eugen danach)")
 	resetDB := flag.Bool("r", false, "Leert/löscht die Systemdatenbank (Beendet Eugen danach)")
 	flag.Parse()
@@ -135,6 +138,16 @@ func main() {
 			}
 			sysContext += fmt.Sprintf("\n[Gefilterte Fehler-Extraktion aus '%s' (Originalgröße: %d Bytes)]\n%s\n", *logFile, bytesScanned, filteredContent)
 			fmt.Printf("%s\u2139 Logdatei '%s' (ca. %d Bytes analysiert) smart gefiltert und in den System-Kontext geladen.%s\n", ColorCyan, *logFile, bytesScanned, ColorReset)
+		}
+	}
+	
+	if *configFile != "" {
+		confContent, err := readConfigFile(*configFile)
+		if err != nil {
+			fmt.Printf("%s\u26A0 Konnte Konfigurationsdatei '%s' nicht lesen: %v%s\n", ColorRed, *configFile, err, ColorReset)
+		} else {
+			sysContext += fmt.Sprintf("\n[Inhalt der Konfigurationsdatei '%s']\n%s\n", *configFile, confContent)
+			fmt.Printf("%s\u2139 Konfigurationsdatei '%s' erfolgreich in den System-Kontext geladen.%s\n", ColorCyan, *configFile, ColorReset)
 		}
 	}
 	
@@ -256,6 +269,72 @@ func main() {
 				fmt.Println("Plan verworfen.")
 			}
 			continue
+		} else if strings.HasPrefix(input, "script ") {
+			taskStr := strings.TrimSpace(strings.TrimPrefix(input, "script "))
+			fmt.Printf("%s\u23F3 %s generiert ein Skript...%s\n", ColorCyan, cfg.AssistantName, ColorReset)
+			
+			zypperCtx := context.SearchPackageKeywords(taskStr)
+			rpmCtx := context.CheckInstalledPackages(taskStr)
+			activeContext := sysContext + zypperCtx + rpmCtx
+
+			// Vector RAG Search disabled for script command as requested
+			
+			if *verbose {
+				fmt.Printf("\n%s[VERBOSE] Script-Context:%s\n%s\n", ColorYellow, ColorReset, activeContext)
+				fmt.Printf("%s[VERBOSE] Task:%s\n%s\n\n", ColorYellow, ColorReset, taskStr)
+			}
+			
+			scriptCode, scriptTxt, pErr := plng.CreateScript(activeContext, taskStr)
+			if pErr != nil {
+				fmt.Printf("%s\u274C Fehler bei der Skript-Generierung: %v%s\n", ColorRed, pErr, ColorReset)
+				continue
+			}
+
+			fmt.Printf("\n%s\n", scriptTxt)
+			if scriptCode == "" {
+				fmt.Printf("%sKein Skript-Code im Markdown Block gefunden.%s\n", ColorYellow, ColorReset)
+				continue
+			}
+			
+			fmt.Printf("\nWas möchtest du tun? [E]xportieren (in %s) / [P]lugin erstellen / [X]Abbrechen : ", config.GetDataDir())
+			scanner.Scan()
+			ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+			
+			if ans == "e" || ans == "exportieren" {
+				scriptName := filepath.Join(config.GetDataDir(), strings.ToLower(cfg.AssistantName)+"_script.sh")
+				// If the LLM already included #!/bin/bash, don't duplicate it
+				scriptContent := scriptCode
+				if !strings.HasPrefix(scriptContent, "#!") {
+					scriptContent = "#!/bin/bash\n# Beschreibung: " + taskStr + "\n\n" + scriptCode
+				}
+				os.WriteFile(scriptName, []byte(scriptContent), 0755)
+				fmt.Printf("%sSkript exportiert nach %s%s\n", ColorGreen, scriptName, ColorReset)
+			} else if ans == "p" || ans == "plugin" || ans == "plugin erstellen" {
+				fmt.Printf("Wie soll das Plugin heißen? (ohne .sh): ")
+				scanner.Scan()
+				pluginName := strings.TrimSpace(scanner.Text())
+				if pluginName == "" {
+					pluginName = "custom_plugin"
+				}
+				if !strings.HasSuffix(pluginName, ".sh") {
+					pluginName += ".sh"
+				}
+				pluginPath := filepath.Join(config.GetDataDir(), "plugins", pluginName)
+				scriptContent := ensurePluginDescription(scriptCode, taskStr)
+				err := os.MkdirAll(filepath.Dir(pluginPath), 0755)
+				if err == nil {
+					err = os.WriteFile(pluginPath, []byte(scriptContent), 0755)
+				}
+				if err != nil {
+					fmt.Printf("%s\u274C Fehler beim Speichern des Plugins: %v%s\n", ColorRed, err, ColorReset)
+				} else {
+					fmt.Printf("%s\u2714\uFE0F Plugin erfolgreich erstellt: %s%s\n", ColorGreen, pluginPath, ColorReset)
+					fmt.Printf("%s\u2139 (Eugen wird das Plugin beim nächsten Start automatisch einlesen)%s\n", ColorCyan, ColorReset)
+				}
+			} else {
+				fmt.Println("Skript verworfen.")
+			}
+			continue
 		} else if input == "save" || input == "export" || input == "save chat" {
 			if len(chatHistory) == 0 {
 				fmt.Printf("%s\u2139 Die Chat-Historie ist leer.%s\n", ColorYellow, ColorReset)
@@ -310,6 +389,28 @@ func main() {
 				fmt.Printf("%s\u274C Fehler: %v%s\n", ColorRed, err, ColorReset)
 			} else {
 				fmt.Printf("%s\u2714\uFE0F Man-Page für '%s' erfolgreich extrahiert und in das RAG-System geladen.%s\n", ColorGreen, toolName, ColorReset)
+			}
+			continue
+		} else if strings.HasPrefix(input, "config ") || strings.HasPrefix(input, "read ") {
+			filePath := ""
+			if strings.HasPrefix(input, "config ") {
+				filePath = strings.TrimSpace(strings.TrimPrefix(input, "config "))
+			} else {
+				filePath = strings.TrimSpace(strings.TrimPrefix(input, "read "))
+			}
+			
+			if filePath == "" {
+				fmt.Printf("%s\u2139 Bitte gib einen Dateipfad an, z.B. 'read /etc/fstab'.%s\n", ColorYellow, ColorReset)
+				continue
+			}
+			
+			fmt.Printf("%s\u23F3 Lese Konfigurationsdatei '%s'...%s\n", ColorCyan, filePath, ColorReset)
+			confContent, err := readConfigFile(filePath)
+			if err != nil {
+				fmt.Printf("%s\u274C Fehler beim Lesen: %v%s\n", ColorRed, err, ColorReset)
+			} else {
+				sysContext += fmt.Sprintf("\n[Inhalt der Konfigurationsdatei '%s']\n%s\n", filePath, confContent)
+				fmt.Printf("%s\u2714\uFE0F Konfigurationsdatei '%s' erfolgreich in den aktiven Kontext geladen.%s\n", ColorGreen, filePath, ColorReset)
 			}
 			continue
 		} else if input == "db show" || input == "db list" {
@@ -487,6 +588,12 @@ func main() {
 
 		// Befehle aus der Antwort extrahieren
 		cmdsToExecute := extractCommands(response)
+		
+		// Fallback: Explizit nach bekannten Plugin-Pfaden in der Antwort suchen,
+		// falls extractCommands sie nicht erkannt hat (z.B. wegen fehlender Backticks)
+		if pErr == nil && len(plugins) > 0 {
+			cmdsToExecute = plugin.ExtractPluginCommands(response, plugins, cmdsToExecute)
+		}
 		
 		// Da die Antwort bereits gestreamt wurde, müssen wir den Text nicht nochmal printen.
 		// Wir parsen nur die Befehle und validieren sie für die Ausführungs-Abfrage.
@@ -768,9 +875,8 @@ func stripThinkBlocks(s string) string {
 // looksLikeExecutableCommand filtert reine Tool-Namen und Beispiele heraus.
 // Gibt nur true zurück wenn der Befehl wie ein echtes, ausführbares Kommando aussieht.
 func looksLikeExecutableCommand(cmd string) bool {
-	// Zu kurz oder nur ein einzelnes Wort → eher ein Inline-Verweis, kein Befehl
 	parts := strings.Fields(cmd)
-	if len(parts) < 2 {
+	if len(parts) == 0 {
 		return false
 	}
 	
@@ -778,6 +884,19 @@ func looksLikeExecutableCommand(cmd string) bool {
 	base := parts[0]
 	if base == "sudo" && len(parts) > 1 {
 		base = parts[1]
+	}
+
+	// Absolute oder relative Pfade zu Skripten (z.B. Plugins) direkt prüfen
+	if strings.HasPrefix(base, "/") || strings.HasPrefix(base, "./") {
+		info, err := os.Stat(base)
+		if err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return true
+		}
+	}
+
+	// Zu kurz oder nur ein einzelnes Wort ohne Pfad → eher ein Inline-Verweis
+	if len(parts) < 2 && !strings.HasPrefix(base, "/") && !strings.HasPrefix(base, "./") {
+		return false
 	}
 	
 	// Shell Builtins (da diese von LookPath nicht gefunden werden)
@@ -819,14 +938,16 @@ func printHelp(cfg *config.EugenConfig) {
 	fmt.Printf("\n%sBefehle:%s\n", ColorYellow, ColorReset)
 	fmt.Printf("  %svalidation off/on%s - Deaktiviert/Aktiviert die man-Page Validierung von KI-Befehlen.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %srag off/on%s        - Deaktiviert/Aktiviert die dynamische RAG Vektordatenbank-Suche.\n", ColorGreen, ColorReset)
-	fmt.Printf("  %ssave, export%s  - Speichert die aktuelle Chat-Sitzung als Markdown Datei im config-Ordner.\n", ColorGreen, ColorReset)
+	fmt.Printf("  %ssave, export%s  - Speichert die aktuelle Chat-Sitzung als Markdown Datei im Daten-Ordner.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %sdb show%s       - Zeigt den Inhalt der lokalen Systemdatenbank an.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %sdb add <text>%s - Fügt eigenes Wissen dauerhaft in die DB und den Prompt hinzu.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %slearn, man <tool>%s  - Liest die Man-Page von <tool> ein und fügt sie ins RAG-System ein.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %shealth, check%s - Führt einen sekundenschnellen Basis-Systemcheck (Load, RAM, Disk) aus.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %sdiagnose%s      - Lädt oder installiert supportconfig und führt eine SLES Tiefendiagnose durch.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %splan <aufgabe>%s- Erstellt ein schrittweises Ausführungsskript für komplexe Tasks.\n", ColorGreen, ColorReset)
+	fmt.Printf("  %sscript <aufg.>%s- Generiert ein Bash-Skript und kann es als Plugin exportieren.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %sanalyze, logs%s - Liest aktuelle kritische Systemlogs aus und bittet die KI um Analyse.\n", ColorGreen, ColorReset)
+	fmt.Printf("  %sread, config <datei>%s - Liest eine Konfigurationsdatei (nur Text) in den Kontext ein.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %shelp, ?%s       - Zeigt diese Hilfeseite an.\n", ColorGreen, ColorReset)
 	fmt.Printf("  %sexit, quit%s    - Beendet den Assistenten.\n\n", ColorGreen, ColorReset)
 	fmt.Printf("%sKonfiguration:%s\n", ColorYellow, ColorReset)
@@ -835,6 +956,7 @@ func printHelp(cfg *config.EugenConfig) {
 	fmt.Printf("Optional kannst du %s beim Starten mit Flags konfigurieren:\n", name)
 	fmt.Printf("  -v               : Aktiviert den Verbose/Debug-Modus.\n")
 	fmt.Printf("  -f <datei>       : Lädt eine Logdatei direkt in den Kontext.\n")
+	fmt.Printf("  -c <datei>       : Lädt eine Konfigurationsdatei (Text) direkt in den Kontext.\n")
 	fmt.Printf("  -p               : Sammelt Systeminformationen in eine statische Datenbank und beendet sich.\n")
 	fmt.Printf("  -r               : Leert die Systemdatenbank und beendet sich.\n")
 }
@@ -853,4 +975,96 @@ func createBackend(cfg *config.EugenConfig) (inference.Backend, error) {
 	default:
 		return nil, fmt.Errorf("unbekanntes Backend '%s' in eugen.conf. Unterstützt: %s, %s", cfg.Backend, config.BackendOllama, config.BackendOpenAI)
 	}
+}
+
+// readConfigFile reads a configuration file and ensures it's a text file.
+func readConfigFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	// Check if it's a text file
+	buf := make([]byte, 512)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+
+	if n == 0 {
+		return "", nil // empty file
+	}
+
+	contentType := http.DetectContentType(buf[:n])
+	if !strings.HasPrefix(contentType, "text/") && contentType != "application/json" {
+		// DetectContentType is sometimes wrong for obscure text config files without common text headers
+		hasNull := false
+		for _, b := range buf[:n] {
+			if b == 0 {
+				hasNull = true
+				break
+			}
+		}
+		if hasNull || contentType == "application/octet-stream" {
+			return "", fmt.Errorf("die Datei scheint eine Binärdatei zu sein (Content-Type: %s)", contentType)
+		}
+	}
+
+	// Reset file pointer to beginning
+	_, err = file.Seek(0, 0)
+	if err != nil {
+		return "", err
+	}
+
+	// Read content, limit to e.g. 100KB to prevent context overflow
+	content, err := io.ReadAll(io.LimitReader(file, 100*1024))
+	if err != nil {
+		return "", err
+	}
+
+	return string(content), nil
+}
+
+// ensurePluginDescription guarantees that a script has a shebang and a single-line
+// "# Description: ..." comment that the plugin loader can parse.
+// If the LLM already included a proper Description line, it is preserved.
+// Otherwise one is injected from the task description.
+func ensurePluginDescription(scriptCode, taskDescription string) string {
+	lines := strings.Split(scriptCode, "\n")
+
+	hasShebang := len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "#!")
+	hasDescription := false
+
+	// Check if a "# Description:" line already exists in the first 10 lines
+	limit := 10
+	if len(lines) < limit {
+		limit = len(lines)
+	}
+	for i := 0; i < limit; i++ {
+		lower := strings.ToLower(strings.TrimSpace(lines[i]))
+		if strings.HasPrefix(lower, "# description:") || strings.HasPrefix(lower, "# beschreibung:") {
+			// Check if there is actual text after the colon
+			parts := strings.SplitN(lines[i], ":", 2)
+			if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
+				hasDescription = true
+			}
+			break
+		}
+	}
+
+	if hasShebang && hasDescription {
+		// Already good, return as-is
+		return scriptCode
+	}
+
+	if hasShebang && !hasDescription {
+		// Insert a Description line right after the shebang
+		result := []string{lines[0], "# Description: " + taskDescription}
+		result = append(result, lines[1:]...)
+		return strings.Join(result, "\n")
+	}
+
+	// No shebang at all — prepend shebang + description
+	return "#!/bin/bash\n# Description: " + taskDescription + "\n\n" + scriptCode
 }

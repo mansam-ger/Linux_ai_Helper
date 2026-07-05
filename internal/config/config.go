@@ -32,7 +32,7 @@ const ConfigFileName = "eugen.conf"
 
 // CurrentConfigVersion defines the layout version of the config file.
 // Update this value whenever new keys are added so user templates are upgraded.
-const CurrentConfigVersion = "2026-05-02_12:13"
+const CurrentConfigVersion = "2026-05-21_18:20"
 
 // DataDirName is the name of the directory for export and RAG data.
 const DataDirName = "eugen_data"
@@ -93,6 +93,9 @@ type EugenConfig struct {
 	// PromptPlan is used by the planner for breaking tasks into command sequences.
 	PromptPlan string
 
+	// PromptScript is used to generate a reusable bash script.
+	PromptScript string
+
 	// PromptValidation is used by the command validator for checking command correctness.
 	PromptValidation string
 
@@ -131,7 +134,7 @@ func DefaultConfig() *EugenConfig {
 		OpenAIEmbedModel:  "text-embedding-3-small",
 		ValidationEnabled: true,
 		RagEnabled:        true,
-		RagThreshold:      0.45,
+		RagThreshold:      0.6,
 
 		PromptSystem: `Du bist {name}, ein hochintelligenter, ressourcenschonender Systemassistent für Administratoren.
 Dein Setup: Komplett lokal ausgeführt (Air-Gapped fähig).
@@ -150,6 +153,23 @@ Regeln:
 2. Füge KEINE Erklärungen oder Backticks um die Befehle hinzu.
 3. Ergänze bei Installationen Parameter wie "-y" (z.B. zypper in -y ...).
 4. Du kannst vor der Liste "CMD:" eine kurze Einleitung schreiben.
+
+Kontext:
+{context}`,
+
+		PromptScript: `Du bist der Script-Generator in "{name}", dem {os} Assistenten.
+Deine Aufgabe ist es, für die folgende Anforderung ein vollständiges, robustes Bash-Skript zu entwerfen.
+Regeln:
+1. Achte darauf ein komplettes sauberes script zu schreiben.
+2. Die ZWEITE Zeile des Skripts (direkt nach dem Shebang) MUSS immer exakt dieses Format haben:
+   # Description: <kurze einzeilige Beschreibung auf Englisch was das Skript tut>
+   Beispiel: # Description: Restarts the VPN service and flushes DNS cache
+   Die Beschreibung MUSS auf EINER Zeile stehen, NICHT mehrzeilig.
+3. Nutze Variablen, Schleifen oder simple if/else Checks, wo es für ein Skript sinnvoll ist.
+4. Dokumentiere deinen Code sauber, so dass er für menschen nachvollziehbar bleibt.
+5. Nutze keine Umlaute, definiere alle variablen auf englisch.
+6. Verwende keine Icons, Emojis oder anderes in deiner Ausgabe.
+7. Das gesamte Skript MUSS in einem einzigen Markdown-Code-Block eingefasst sein.
 
 Kontext:
 {context}`,
@@ -324,6 +344,11 @@ prompt_plan = """
 %s
 """
 
+# ---- Script-Prompt ----
+prompt_script = """
+%s
+"""
+
 # ---- Validierungs-Prompt ----
 prompt_validation = """
 %s
@@ -360,6 +385,7 @@ prompt_health_check = """
 		cfg.RagThreshold,
 		strings.TrimSpace(cfg.PromptSystem),
 		strings.TrimSpace(cfg.PromptPlan),
+		strings.TrimSpace(cfg.PromptScript),
 		strings.TrimSpace(cfg.PromptValidation),
 		strings.TrimSpace(cfg.PromptDiagnose),
 		strings.TrimSpace(cfg.PromptLogAnalysis),
@@ -454,6 +480,8 @@ func applyConfigValue(cfg *EugenConfig, key, value string) {
 		cfg.PromptSystem = value
 	case "prompt_plan":
 		cfg.PromptPlan = value
+	case "prompt_script":
+		cfg.PromptScript = value
 	case "prompt_validation":
 		cfg.PromptValidation = value
 	case "prompt_diagnose":

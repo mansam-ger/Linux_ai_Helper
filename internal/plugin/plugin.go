@@ -90,11 +90,53 @@ func FormatPluginContext(plugins []Plugin) string {
 
 	var sb strings.Builder
 	sb.WriteString("\nZusätzliche lokale Admin-Werkzeuge (Plugins):\n")
-	sb.WriteString("Du kannst diese Skripte vorschlagen oder aufrufen, wenn sie zur Problemlösung passen. Nutze den vollen Pfad in Backticks.\n")
+	sb.WriteString("Wenn eines dieser Plugins zur Aufgabe des Benutzers passt, schlage es als ausführbaren Befehl vor.\n")
+	sb.WriteString("WICHTIG: Gib den Plugin-Aufruf als reinen Pfad in einem eigenen Code-Block an, z.B.:\n")
+	sb.WriteString("```\n/pfad/zum/plugin.sh\n```\n")
+	sb.WriteString("Verwende KEIN 'bash' oder 'sudo' davor, nur den reinen Pfad.\n\n")
 	
 	for _, p := range plugins {
 		sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", p.Name, p.Path, p.Description))
 	}
 	
 	return sb.String()
+}
+
+// ExtractPluginCommands scans a response text for known plugin paths and returns
+// any that were mentioned but are not already in the existing commands list.
+// This acts as a bulletproof fallback regardless of how the LLM formatted the suggestion.
+func ExtractPluginCommands(response string, plugins []Plugin, existingCmds []string) []string {
+	var additional []string
+
+	for _, p := range plugins {
+		// Check if the plugin path appears anywhere in the response
+		if !strings.Contains(response, p.Path) {
+			continue
+		}
+
+		// Check if it's already covered by an existing command
+		alreadyPresent := false
+		for _, cmd := range existingCmds {
+			if strings.Contains(cmd, p.Path) {
+				alreadyPresent = true
+				break
+			}
+		}
+		if alreadyPresent {
+			continue
+		}
+
+		// Also check against commands we're about to add
+		for _, cmd := range additional {
+			if strings.Contains(cmd, p.Path) {
+				alreadyPresent = true
+				break
+			}
+		}
+		if !alreadyPresent {
+			additional = append(additional, p.Path)
+		}
+	}
+
+	return append(existingCmds, additional...)
 }
